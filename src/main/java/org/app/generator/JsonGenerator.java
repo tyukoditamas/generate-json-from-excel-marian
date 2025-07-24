@@ -8,11 +8,14 @@ import org.app.model.ExcelDto;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
+
+import static org.app.generator.CountryCapital.getCapital;
 
 public class JsonGenerator {
     private final ObjectMapper MAPPER = new ObjectMapper();
@@ -32,7 +35,7 @@ public class JsonGenerator {
     }
 
     private void doGenerate(List<ExcelDto> dtos) throws IOException {
-        // group by the four columns
+        // Group by shipper/importer as before
         Map<GroupKey, List<ExcelDto>> groups = dtos.stream().collect(
                 Collectors.groupingBy(d -> new GroupKey(
                         d.getShipperName(),
@@ -43,227 +46,178 @@ public class JsonGenerator {
         );
 
         for (List<ExcelDto> group : groups.values()) {
-            int total = group.size();
-            int partNo = 1;
+            // Split into chunks of 3 rows each (if needed)
+            for (int i = 0; i < group.size(); i += 3) {
+                List<ExcelDto> subList = group.subList(i, Math.min(i + 3, group.size()));
 
-            // split into sublists of max size 3
-            for (int i = 0; i < total; i += 3) {
-                List<ExcelDto> subList = group.subList(i, Math.min(i + 3, total));
-
-                // build filename: join all trackingNr’s with a space
+                // Compute aggregates
+                double totalGrossMass = subList.stream()
+                        .mapToDouble(d -> {
+                            try { return Double.parseDouble(d.getWeight()); }
+                            catch (Exception e) { return 0.0; }
+                        }).sum();
+                int totalPackages = subList.stream()
+                        .mapToInt(d -> {
+                            try { return Integer.parseInt(d.getNrOfPackages()); }
+                            catch (Exception e) { return 0; }
+                        }).sum();
                 String joinedTracking = subList.stream()
                         .map(ExcelDto::getTrackingNr)
                         .collect(Collectors.joining(" "));
 
-                String fileName = joinedTracking + ".json";
-                Path out = outputDir.resolve(fileName);
-
-                // Sum weights for all entries (convert to double, skip blank/null)
-                double totalGrossMass = group.stream()
-                        .mapToDouble(d -> {
-                            try {
-                                return Double.parseDouble(d.getWeight());
-                            } catch (Exception e) {
-                                return 0.0;
-                            }
-                        })
-                        .sum();
-
-                int totalPackages = subList.stream()
-                        .mapToInt(d -> {
-                            try {
-                                return Integer.parseInt(d.getNrOfPackages());
-                            } catch (Exception e) {
-                                return 0;
-                            }
-                        })
-                        .sum();
-
-                // build the JSON tree
+                // Prepare root node
                 ObjectNode root = MAPPER.createObjectNode();
+                // Top‑level metadata
+                root.put("type", "IE3F33");
+                root.put("version", "2.0");
+                root.putNull("draftId");
+                root.put("lrn", "F33BIS"); // or derive dynamically
+                root.putNull("referralRequestReference");
+                root.putNull("attachments");
+                String now = Instant.now().toString();
+                root.put("documentIssueDate", now);
 
-                // --- ensFilingInformation ---
-                ObjectNode filing = root.putObject("ensFilingInformation");
-                filing.put("specificCircumstanceIndicator", "F33");
-                filing.put("addressedMemberStateCountry", "RO");
-                ObjectNode transportMeans = filing.putObject("activeBorderTransportMeans");
-                transportMeans.put("transportMode", "4");
+                // Data section
+                ObjectNode data = root.putObject("data");
+                data.put("LRN", "F33BIS");
+                ObjectNode di = data.putObject("documentIssueDate");
+                di.put("DateTime", now);
+                data.put("SpecificCircumstanceIndicator", "F33");
 
-                // --- ensActors ---
-                ObjectNode actors = root.putObject("ensActors");
-                // declarant
-                ObjectNode declarant = actors.putObject("declarant");
-                declarant.put("name", "UPS MOLDOVA SRL");
-                declarant.put("identificationNumber", "RO13191000");
-                ObjectNode decAddr = declarant.putObject("address");
-                decAddr.put("street", "AUREL VLAICU");
-                decAddr.putNull("streetAdditionalLine");
-                decAddr.put("number", "11C");
-                decAddr.put("postCode", "075100");
-                decAddr.put("city", "OTOPENI");
-                decAddr.putNull("subDivision");
-                decAddr.put("country", "RO");
-                decAddr.put("togglePoBox", false);
-                ArrayNode decComm = declarant.putArray("communication");
-                ObjectNode decEmail = decComm.addObject();
-                decEmail.put("identifier", "dkurteanu@ups.com");
-                decEmail.put("type", "EM");
+                ObjectNode addrMember = data.putObject("addressedMemberState");
+                addrMember.put("country", "RO");
 
-                // representative
-                ObjectNode rep = actors.putObject("representative");
+                // Representative (static)
+                ObjectNode rep = data.putObject("representative");
                 rep.put("name", "MARIANS TRADING SRL");
                 rep.put("identificationNumber", "RO15467129");
-                ObjectNode repAddr = rep.putObject("address");
-                repAddr.put("street", "MEDITATIEI");
-                repAddr.putNull("streetAdditionalLine");
-                repAddr.put("number", "7");
-                repAddr.put("postCode", "76500");
-                repAddr.put("city", "BUCURESTI");
-                repAddr.putNull("subDivision");
-                repAddr.put("country", "RO");
-                repAddr.put("togglePoBox", false);
-                ArrayNode repComm = rep.putArray("communication");
-                ObjectNode repEmail = repComm.addObject();
-                repEmail.put("identifier", "UPS@MTRADING.RO");
-                repEmail.put("type", "EM");
                 rep.put("status", "2");
+                ObjectNode repAddr = rep.putObject("address");
+                repAddr.put("city", "Bucuresti");
+                repAddr.put("country", "RO");
+                repAddr.put("street", "MEDITATIEI");
+                repAddr.put("postCode", "1111");
+                repAddr.put("number", "7");
+                ArrayNode repComm = rep.putArray("communication");
+                repComm.addObject()
+                        .put("identifier", "UPS@MTRADING.RO")
+                        .put("type", "EM");
 
-                // --- houseConsignments (always a single-element array) ---
-                ArrayNode hcArray = root.putArray("houseConsignments");
-                ObjectNode hc = hcArray.addObject();
+                // Active transport means
+                ObjectNode transport = data.putObject("activeBorderTransportMeans");
+                transport.put("ModeOfTransport", "4");
 
-                // transportDocument
-                ObjectNode td = hc.putObject("transportDocument");
-                td.put("type", "N741");
-                td.put("documentNumber", joinedTracking);
+                // Consignment master level
+                ObjectNode cml = data.putObject("consignmentMasterLevel");
+                ArrayNode chl = cml.putArray("consignmentHouseLevel");
+                ObjectNode house = chl.addObject();
+                house.put("containerIndicator", "0");
+                house.put("totalGrossMass", totalGrossMass);
 
-                // transportDocumentMaster
-                ObjectNode tdm = hc.putObject("transportDocumentMaster");
+                // Place of acceptance (example: static or from DTO)
+                ObjectNode poa = house.putObject("placeOfAcceptance");
+                poa.put("location", "OTOPENI");
+                poa.putObject("address").put("country", "RO");
+
+                // Transport document master level
+                ObjectNode tdm = house.putObject("transportDocumentMasterLevel");
                 tdm.put("documentNumber", subList.get(0).getMasterDocument());
-                tdm.put("type", "N740");
+                tdm.put("type", "N741");
 
-                // containersInformation
-                ObjectNode ci = hc.putObject("containersInformation");
-                ci.put("containerIndicator", false);
-                ci.putArray("transportEquipment");
+                // Carrier
+                house.putObject("carrier")
+                        .put("identificationNumber", "RO13191000");
 
-                // additionalFiscalReferences
-                ObjectNode afr = hc.putObject("additionalFiscalReferences");
-                afr.putNull("role");
-                afr.putNull("VATIdentificationNumber");
-
-                hc.putNull("receptacleIdentificationNumber");
-                hc.putNull("totalAmountInvoiced");
-                hc.putNull("additionsAndDeductionsAmount");
-                hc.putNull("postalCharges");
-                hc.putArray("additionalInformation");
-
-                // additionalSupplyChainActor
-                ArrayNode actors2 = hc.putArray("additionalSupplyChainActor");
-                ObjectNode asa = actors2.addObject();
-                asa.put("identificationNumber", "RO13191000");
-                asa.put("role", "CR");
-
-                hc.put("totalGrossMass", String.valueOf(totalGrossMass));
-                hc.put("referenceNumber", subList.get(0).getMasterDocument());
-
-                // consignor
-                ObjectNode consignor = hc.putObject("consignor");
-                consignor.put("name", subList.get(0).getShipperName());
-                consignor.putNull("identificationNumber");
-                ObjectNode cAddr = consignor.putObject("address");
-                cAddr.put("city", subList.get(0).getShipperCity());
-                cAddr.put("country", "MD");
-                cAddr.putNull("subDivision");
-                cAddr.put("street", subList.get(0).getShipperAddress());
-                cAddr.put("postCode", "MD2005");
-                cAddr.putNull("streetAdditionalLine");
-                cAddr.put("number", "30");
-                cAddr.putNull("poBox");
-                ArrayNode cComm = consignor.putArray("communication");
-                ObjectNode cEmail = cComm.addObject();
-                cEmail.put("identifier", "dkurteanu@ups.com");
-                cEmail.put("type", "EM");
-                consignor.put("typeOfPerson", "2");
-
-                // consignee
-                ObjectNode consignee = hc.putObject("consignee");
+                // Consignee
+                ObjectNode consignee = house.putObject("consignee");
                 consignee.put("name", subList.get(0).getImporterName());
-                consignee.putNull("identificationNumber");
+                consignee.put("typeOfPerson", "2");
                 ObjectNode coAddr = consignee.putObject("address");
                 coAddr.put("city", subList.get(0).getImporterCity());
                 coAddr.put("country", subList.get(0).getImporterCountry());
-                coAddr.putNull("subDivision");
                 coAddr.put("street", subList.get(0).getImporterAddress());
                 coAddr.put("postCode", subList.get(0).getImporterPostCode());
-                coAddr.putNull("streetAdditionalLine");
                 coAddr.put("number", "5");
-                coAddr.putNull("poBox");
-                ArrayNode coComm = consignee.putArray("communication");
-                ObjectNode coEmail = coComm.addObject();
-                coEmail.put("identifier", "dkurteanu@ups.com");
-                coEmail.put("type", "EM");
-                consignee.put("typeOfPerson", "2");
+                consignee.putArray("communication")
+                        .addObject()
+                        .put("identifier", "dkurteanu@ups.com")
+                        .put("type", "EM");
 
-                hc.putNull("notifyParty");
-                hc.put("transportCharges", "Z");
-                hc.put("carrierIdentificationNumber", "RO13191000");
+                // Goods items (single)
+                ArrayNode goods = house.putArray("goodsItem");
+                ObjectNode gi = goods.addObject();
+                gi.put("goodsItemNumber", 1);
+                ObjectNode comm = gi.putObject("commodity");
+                comm.put("descriptionOfGoods", subList.get(0).getDescriptionOfGoods());
+                comm.putObject("commodityCode")
+                        .put("harmonizedSystemSubHeadingCode", subList.get(0).getMasterAwb());
+                gi.putObject("weight").put("grossMass", totalGrossMass);
+                ArrayNode packaging = gi.putArray("packaging");
+                packaging.addObject()
+                        .put("typeOfPackages", "PC")
+                        .put("numberOfPackages", totalPackages)
+                        .put("shippingMarks", "FARA MARCA");
 
-                // supplementaryDeclarant
-                ArrayNode sup = hc.putArray("supplementaryDeclarant");
-                ObjectNode sd = sup.addObject();
-                sd.put("identificationNumber", "RO15467129");
-                sd.put("supplementaryFilingType", "1");
+                // Consignor
+                ObjectNode consignor = house.putObject("consignor");
+                consignor.put("name", subList.get(0).getShipperName());
+                consignor.put("typeOfPerson", "2");
+                ObjectNode cAddr = consignor.putObject("address");
+                cAddr.put("city", subList.get(0).getShipperCity());
+                cAddr.put("country", "MD");
+                cAddr.put("street", subList.get(0).getShipperAddress());
+                cAddr.put("postCode", "2005");
+                cAddr.put("number", "30");
+                consignor.putArray("communication")
+                        .addObject()
+                        .put("identifier", "dkurteanu@ups.ro")
+                        .put("type", "EM");
 
-                // supportingDocuments
-                ArrayNode docs = hc.putArray("supportingDocuments");
-                ObjectNode doc0 = docs.addObject();
-                doc0.put("referenceNumber", subList.get(0).getMasterDocument());
-                doc0.put("type", "N741");
+                // Transport charges
+                house.putObject("transportCharges")
+                        .put("methodOfPayment", "Z");
 
-                // placeOfAcceptance
-                ObjectNode poa = hc.putObject("placeOfAcceptance");
-                poa.put("location", "CHISINAU");
-                poa.put("addressCountry", "MD");
-                poa.putNull("unlocode");
+                // Place of delivery
+                ObjectNode pod = house.putObject("placeOfDelivery");
+                pod.put("location", getCapital(subList.get(0).getImporterCountry()));
+                pod.putObject("address").put("country", subList.get(0).getImporterCountry());
 
-                // placeOfDelivery
-                ObjectNode pod = hc.putObject("placeOfDelivery");
-                pod.put("location", "OTOPENI");
-                pod.put("addressCountry", "RO");
-                pod.putNull("unlocode");
-
-                // countriesOfRoutingOfConsignment
-                ArrayNode cor = hc.putArray("countriesOfRoutingOfConsignment");
-                for (String ctry : subList.get(0).getCountriesOfRoutingOfConsignment()) {
-                    cor.add(ctry);
+                // Routing countries
+                ArrayNode routing = house.putArray("countriesOfRoutingOfConsignment");
+                int seq = 1;
+                for (String c : subList.get(0).getCountriesOfRoutingOfConsignment()) {
+                    routing.addObject()
+                            .put("sequenceNumber", seq++)
+                            .put("country", c);
                 }
 
-                // goodsItems
-                ArrayNode giArr = hc.putArray("goodsItems");
-                ObjectNode gi = giArr.addObject();
-                gi.put("goodsItemNumber", "1");
-                ObjectNode cc = gi.putObject("commodityCode");
-                cc.put("harmonizedSystemSubHeadingCode", subList.get(0).getMasterAwb());
-                cc.putNull("combinedNomenclatureCode");
-                gi.putNull("CUSCode");
-                gi.putArray("UNDangerousGoods");
-                gi.put("descriptionOfGoods", subList.get(0).getDescriptionOfGoods());
-                gi.put("grossMass", String.valueOf(totalGrossMass));
-                gi.putArray("transportEquipment");
-                gi.putArray("additionalSupplyChainActor");
-                ArrayNode supDocs2 = gi.putArray("supportingDocuments");
-                ObjectNode sd2 = supDocs2.addObject();
-                sd2.put("referenceNumber", subList.get(0).getMasterDocument());
-                sd2.put("type", "N741");
-                gi.putArray("additionalInformation");
-                ArrayNode pack = gi.putArray("packaging");
-                ObjectNode pk = pack.addObject();
-                pk.put("typeOfPackages", "PC");
-                pk.put("numberOfPackages", totalPackages);
-                pk.put("shippingMarks", "FARA");
+                // Transport document house level
+                ObjectNode tdh = house.putObject("transportDocumentHouseLevel");
+                tdh.put("documentNumber", joinedTracking);
+                tdh.put("type", "N740");
 
-                // write it out
+                // Reference UCR
+                house.putObject("referenceNumberUCR")
+                        .put("referenceNumberUCR", subList.get(0).getMasterDocument());
+
+                // Declarant (static)
+                ObjectNode decl = data.putObject("declarant");
+                decl.put("name", "UPS ROMANIA");
+                decl.put("identificationNumber", "RO13191000");
+                ObjectNode dAddr = decl.putObject("address");
+                dAddr.put("city", "OTOPENI");
+                dAddr.put("country", "RO");
+                dAddr.put("street", "AUREL VLAICU");
+                dAddr.put("postCode", "075100");
+                dAddr.put("number", "11C");
+                ArrayNode dComm = decl.putArray("communication");
+                dComm.addObject()
+                        .put("identifier", "dkurteanu@ups.ro")
+                        .put("type", "EM");
+
+                // Write JSON to file
+                String fileName = joinedTracking + ".json";
+                Path out = outputDir.resolve(fileName);
                 MAPPER.writerWithDefaultPrettyPrinter()
                         .writeValue(out.toFile(), root);
                 log.accept("Written JSON: " + fileName);

@@ -49,8 +49,8 @@ public class ExcelReader {
                     case 8:  dto.setImporterPostCode(val.trim()); break;
                     case 9:  dto.setNrOfPackages(val.trim()); break;
                     case 10: dto.setWeight(val.trim()); break;
-                    case 11: dto.setDescriptionOfGoods(val.trim()); break;
-                    case 12: dto.setMasterAwb(val.trim()); break;
+                    case 11: dto.setMasterAwb(val.trim()); break;
+                    case 12: dto.setDescriptionOfGoods(val.trim()); break;
                     case 13: dto.setMasterDocument(val.trim()); break;
                 }
 
