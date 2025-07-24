@@ -1,1 +1,4 @@
 Program pentru ICS 2
+
+
+mvn clean package
